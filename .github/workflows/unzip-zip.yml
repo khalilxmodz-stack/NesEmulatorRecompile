@@ -1,0 +1,85 @@
+
+name: Extract ZIP Project to Repository
+
+on:
+  push:
+    paths:
+      - '*.zip'
+      - '**/*.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unzip-project
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find ZIP archive
+        id: archive
+        shell: bash
+        run: |
+          mapfile -t files < <(find . -maxdepth 1 -type f -iname "*.zip")
+
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "Expected exactly one ZIP file in repository root."
+            exit 1
+          fi
+
+          echo "file=${files[0]}" >> "$GITHUB_OUTPUT"
+          echo "Found: ${files[0]}"
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          mkdir -p extracted
+
+          unzip -q "${{ steps.archive.outputs.file }}" -d extracted
+
+          echo "ZIP extracted successfully."
+
+      - name: Copy project files to repository root
+        shell: bash
+        run: |
+          SOURCE="extracted"
+
+          # Handle ZIP files containing one root directory
+          mapfile -t entries < <(find extracted -mindepth 1 -maxdepth 1)
+
+          if [ "${#entries[@]}" -eq 1 ] && [ -d "${entries[0]}" ]; then
+            SOURCE="${entries[0]}"
+          fi
+
+          # Preserve the extraction workflow
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='.github/workflows/unzip-zip.yml' \
+            "$SOURCE/" ./
+
+          rm -rf extracted
+
+      - name: Commit extracted project
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Extract NES Emulator project from ZIP"
+          git push
